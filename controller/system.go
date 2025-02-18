@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"github.com/golang/glog"
 	"net"
 	"os/exec"
 	"strings"
@@ -91,6 +92,7 @@ func natRule(op string, vip, localAddr net.IP, protocol, lport, dport string) er
 		"iptables -t nat -%s PREROUTING -p %s -d %s --dport %s -j DNAT --to-destination %s:%s",
 		op, protocol, vip.String(), lport, localAddr.String(), dport,
 	)
+	glog.V(4).Infof("updating nat rules: %s", cmd)
 	cmdList := getCmdList(cmd)
 	_, err := exec.Command(execCmd, cmdList...).Output()
 	if err != nil {

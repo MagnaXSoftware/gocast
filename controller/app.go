@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+
 	"github.com/mayuresh82/gocast/config"
 )
 
@@ -50,40 +51,65 @@ func (m Monitors) Contains(elem *Monitor) bool {
 	return false
 }
 
+type AppSource string
+
+const (
+	nomadAppSource  AppSource = "nomadApp"
+	consulAppSource AppSource = "consulApp"
+)
+
+// ipPort replicates portions of netip.AddrPort which is only available as of go 1.18 (we support as far back as 1.12)
+type ipPort struct {
+	ip   net.IP
+	port uint16
+}
+
+func (a *ipPort) IsEmpty() bool {
+	return (len(a.ip) == 0 || a.ip.IsUnspecified()) && a.port == 0
+}
+
+func (a *ipPort) Equal(other *ipPort) bool {
+	return a.ip.Equal(other.ip) && a.port == other.port
+}
+
+func (a *ipPort) String() string {
+	return fmt.Sprintf("%s:%d", a.ip.String(), a.port)
+}
+
+func (a *ipPort) HasIP() bool {
+	return len(a.ip) != 0 && !a.ip.IsUnspecified()
+}
+
+func (a *ipPort) IP() net.IP {
+	return a.ip
+}
+
+func (a *ipPort) Port() uint16 {
+	return a.port
+}
+
 type App struct {
 	Name      string
 	Vip       *Route
 	VipConfig config.VipConfig
 	Monitors  Monitors
 	Nats      []string
-	Source    string
+	Source    AppSource
+	// Endpoint is used to represent the IP and Port where the nomad service is bound.
+	// This is required in cases where nomad services are hosted on machines with multiple network interfaces/addresses
+	// and the service is bound on an IP that is different from the localIP (either the configured IP or the IP of the
+	// interface where the BGP Peer can be reached).
+	Endpoint ipPort
 }
 
-func (a *App) Equal(other *App) bool {
-	if len(a.Monitors) != len(other.Monitors) {
-		return false
-	}
-	for _, m := range other.Monitors {
-		if !a.Monitors.Contains(m) {
-			return false
-		}
-	}
-	return a.Name == other.Name && a.Vip.Net.String() == other.Vip.Net.String()
-}
-
-func (a *App) String() string {
-	return fmt.Sprintf("Name: %s, Vip: %s, VipConf: %v, Monitors: %v, Nats: %v, Source: %s",
-		a.Name, a.Vip.Net.String(), a.VipConfig, a.Monitors, a.Nats, a.Source)
-}
-
-func NewApp(appName, vip string, vipConfig config.VipConfig, monitors []string, nats []string, source string) (*App, error) {
+func NewApp(appName, vip string, vipConfig config.VipConfig, monitors []string, nats []string, source AppSource) (*App, error) {
 	if appName == "" {
-		return nil, fmt.Errorf("Invalid app name")
+		return nil, fmt.Errorf("invalid app name")
 	}
 	app := &App{Name: appName, Nats: nats, Source: source}
 	_, ipnet, err := net.ParseCIDR(vip)
 	if err != nil {
-		return nil, fmt.Errorf("Invalid VIP specified, need ip/mask")
+		return nil, fmt.Errorf("invalid VIP specified, need ip/mask")
 	}
 	app.Vip = &Route{Net: ipnet, Communities: vipConfig.BgpCommunities}
 	app.VipConfig = vipConfig
@@ -95,13 +121,13 @@ func NewApp(appName, vip string, vipConfig config.VipConfig, monitors []string, 
 		switch mon.Type.String() {
 		case "port":
 			if len(parts) != 3 {
-				return nil, fmt.Errorf("Invalid port monitor, must specify proto:port")
+				return nil, fmt.Errorf("invalid port monitor, must specify proto:port")
 			}
 			mon.Protocol = parts[1]
 			mon.Port = parts[2]
 		case "exec":
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("Invalid exec monitor, must specify command")
+				return nil, fmt.Errorf("invalid exec monitor, must specify command")
 			}
 			mon.Cmd = parts[1]
 		case "consul":
@@ -112,4 +138,29 @@ func NewApp(appName, vip string, vipConfig config.VipConfig, monitors []string, 
 		app.Monitors = append(app.Monitors, mon)
 	}
 	return app, nil
+}
+
+func (a *App) Equal(other *App) bool {
+	if len(a.Monitors) != len(other.Monitors) {
+		return false
+	}
+	for _, m := range other.Monitors {
+		if !a.Monitors.Contains(m) {
+			return false
+		}
+	}
+	return a.Name == other.Name &&
+		a.Vip.Net.String() == other.Vip.Net.String() &&
+		a.Source == other.Source
+}
+
+// EndpointEqual determines if the Endpoint of an App matches this one's.
+// This is only useful for the nomad apps as the consul ones don't use that field.
+func (a *App) EndpointEqual(other *App) bool {
+	return a.Endpoint.Equal(&other.Endpoint)
+}
+
+func (a *App) String() string {
+	return fmt.Sprintf("Name: %s, Vip: %s, VipConf: %v, Monitors: %v, Nats: %v, Source: %s",
+		a.Name, a.Vip.Net.String(), a.VipConfig, a.Monitors, a.Nats, a.Source)
 }

@@ -9,13 +9,16 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	c "github.com/mayuresh82/gocast/config"
 	api "github.com/osrg/gobgp/api"
+
+	c "github.com/mayuresh82/gocast/config"
 )
 
 const (
+	defaultQueryInterval   = 30 * time.Second
 	defaultMonitorInterval = 10 * time.Second
 	defaultCleanupTimer    = 15 * time.Minute
+	monitorTimeout         = 10 * time.Second
 )
 
 func portMonitor(protocol, port string) bool {
@@ -63,11 +66,13 @@ type appMon struct {
 
 // MonitorMgr manages the lifecycle of registered apps
 type MonitorMgr struct {
+	// monitors maintains a map of app names to "appMon" structs
 	monitors map[string]*appMon
 	cleanups map[string]chan bool
 	config   *c.Config
 	ctrl     *Controller
 	consul   *ConsulMon
+	nomad    *NomadMonitor
 
 	monMu sync.Mutex
 	clMu  sync.Mutex
@@ -84,16 +89,28 @@ func NewMonitor(config *c.Config) *MonitorMgr {
 		cleanups: make(map[string]chan bool),
 	}
 	if config.Agent.ConsulAddr != "" {
-		cmon, err := NewConsulMon(config.Agent.ConsulAddr, config.Agent.ConsulToken)
+		consulMonitor, err := NewConsulMonitor(config.Agent.ConsulAddr, config.Agent.ConsulToken)
 		if err != nil {
 			glog.Errorf("Failed to start consul monitor: %v", err)
 		} else {
-			mon.consul = cmon
+			mon.consul = consulMonitor
 			go mon.consulMon()
+		}
+	}
+	if config.Agent.Nomad.Enabled {
+		nomadMonitor, err := NewNomadMonitor(config.Agent.Nomad.Addr, config.Agent.Nomad.Namespace, config.Agent.Nomad.NodeID, config.Agent.Nomad.Token)
+		if err != nil {
+			glog.Errorf("failed to start Nomad monitor: %v", err)
+		} else {
+			mon.nomad = nomadMonitor
+			go mon.nomad.Monitor(mon)
 		}
 	}
 	if config.Agent.MonitorInterval == 0 {
 		config.Agent.MonitorInterval = defaultMonitorInterval
+	}
+	if config.Agent.Nomad.QueryInterval == 0 {
+		config.Agent.Nomad.QueryInterval = defaultQueryInterval
 	}
 	if config.Agent.CleanupTimer == 0 {
 		config.Agent.CleanupTimer = defaultCleanupTimer
@@ -126,7 +143,7 @@ func (m *MonitorMgr) consulMon() {
 			var toRemove []string
 			m.monMu.Lock()
 			for name, mon := range m.monitors {
-				if mon.app.Source != "consul" {
+				if mon.app.Source != consulAppSource {
 					continue
 				}
 				var found bool
@@ -171,20 +188,39 @@ func (m *MonitorMgr) Add(app *App) {
 	// if the same app already exists but its run loop is not running,
 	// then just restart the run loop
 	if existing != nil {
-		if !existing.runLoopOn {
+		if existing.app.Source == nomadAppSource && !existing.app.EndpointEqual(app) {
+			glog.Infof("App %s but the endpoint changed", app.Name)
+			// the endpoint changed!
+			m.monMu.Lock()
+			// remove the existing app
+			m.Remove(existing.app.Name)
+			m.addApp(app)
+
+			existing = nil
+
+			m.monMu.Unlock()
+		}
+		if existing != nil && !existing.runLoopOn {
 			go m.runLoop(existing)
 		}
 	} else {
 		// else add a new app and start its run loop
-		appMon := &appMon{app: app, done: make(chan bool)}
-		m.monitors[app.Name] = appMon
-		go m.runLoop(appMon)
+		m.addApp(app)
 		glog.Infof("Registered a new app: %v", app.String())
 	}
 }
 
+func (m *MonitorMgr) addApp(app *App) {
+	m.monMu.Lock()
+	defer m.monMu.Unlock()
+
+	appMon := &appMon{app: app, done: make(chan bool)}
+	m.monitors[app.Name] = appMon
+	go m.runLoop(appMon)
+}
+
 // Remove removes an app from monitor manager, stops BGP
-/// announcement and cleans up state
+// announcement and cleans up state
 func (m *MonitorMgr) Remove(appName string) {
 	m.monMu.Lock()
 	defer m.monMu.Unlock()
@@ -204,11 +240,23 @@ func (m *MonitorMgr) Remove(appName string) {
 			parts := strings.Split(nat, ":")
 			switch len(parts) {
 			case 3:
-				if err := natRule("D", a.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[2]); err != nil {
+				localIp := m.ctrl.localIP
+				if a.app.Endpoint.HasIP() {
+					localIp = a.app.Endpoint.IP()
+				}
+				if err := natRule("D", a.app.Vip.Net.IP, localIp, parts[0], parts[1], parts[2]); err != nil {
 					glog.Errorf("Failed to remove app: %s: %v", a.app.Name, err)
 				}
 			case 2:
-				if err := natRule("D", a.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[1]); err != nil {
+				destPort := parts[1]
+				if a.app.Endpoint.Port() != 0 {
+					destPort = fmt.Sprintf("%d", a.app.Endpoint.Port())
+				}
+				localIp := m.ctrl.localIP
+				if a.app.Endpoint.HasIP() {
+					localIp = a.app.Endpoint.IP()
+				}
+				if err := natRule("D", a.app.Vip.Net.IP, localIp, parts[0], parts[1], destPort); err != nil {
 					glog.Errorf("Failed to remove app: %s: %v", a.app.Name, err)
 				}
 			default:
@@ -222,17 +270,17 @@ func (m *MonitorMgr) Remove(appName string) {
 func (m *MonitorMgr) runMonitors(app *App) bool {
 	for _, mon := range app.Monitors {
 		var check bool
+		var err error
 		switch mon.Type {
 		case Monitor_PORT:
 			check = portMonitor(mon.Protocol, mon.Port)
 		case Monitor_EXEC:
 			check = execMonitor(mon.Cmd)
 		case Monitor_CONSUL:
-			c, err := m.consul.healthCheck(app.Name)
+			check, err = m.consul.healthCheck(app.Name)
 			if err != nil {
 				glog.Errorf("Failed to perform consul healthcheck for %s: %v", app.Name, err)
 			}
-			check = c
 		}
 		if !check {
 			glog.V(2).Infof("%s Monitor for app: %s Failed", mon.Type.String(), app.Name)
@@ -256,11 +304,23 @@ func (m *MonitorMgr) checkCond(am *appMon) error {
 				parts := strings.Split(nat, ":")
 				switch len(parts) {
 				case 3:
-					if err := natRule("A", app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[2]); err != nil {
+					localIp := m.ctrl.localIP
+					if am.app.Endpoint.HasIP() {
+						localIp = am.app.Endpoint.IP()
+					}
+					if err := natRule("A", app.Vip.Net.IP, localIp, parts[0], parts[1], parts[2]); err != nil {
 						return err
 					}
 				case 2:
-					if err := natRule("A", app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[1]); err != nil {
+					destPort := parts[1]
+					if am.app.Endpoint.Port() != 0 {
+						destPort = fmt.Sprintf("%d", am.app.Endpoint.Port())
+					}
+					localIp := m.ctrl.localIP
+					if am.app.Endpoint.HasIP() {
+						localIp = am.app.Endpoint.IP()
+					}
+					if err := natRule("A", app.Vip.Net.IP, localIp, parts[0], parts[1], destPort); err != nil {
 						return err
 					}
 				default:
@@ -324,14 +384,26 @@ func (m *MonitorMgr) CloseAll() {
 		if am.runLoopOn {
 			close(am.done)
 		}
-		deleteLoopback(am.app.Vip.Net)
+		_ = deleteLoopback(am.app.Vip.Net)
 		for _, nat := range am.app.Nats {
 			parts := strings.Split(nat, ":")
 			switch len(parts) {
 			case 3:
-				natRule("D", am.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[2])
+				localIp := m.ctrl.localIP
+				if am.app.Endpoint.HasIP() {
+					localIp = am.app.Endpoint.IP()
+				}
+				_ = natRule("D", am.app.Vip.Net.IP, localIp, parts[0], parts[1], parts[2])
 			case 2:
-				natRule("D", am.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[1])
+				destPort := parts[1]
+				if am.app.Endpoint.Port() != 0 {
+					destPort = fmt.Sprintf("%d", am.app.Endpoint.Port())
+				}
+				localIp := m.ctrl.localIP
+				if am.app.Endpoint.HasIP() {
+					localIp = am.app.Endpoint.IP()
+				}
+				_ = natRule("D", am.app.Vip.Net.IP, localIp, parts[0], parts[1], destPort)
 			default:
 				continue
 			}
@@ -339,7 +411,7 @@ func (m *MonitorMgr) CloseAll() {
 	}
 }
 
-// CleanUp periodically monitors for stale apps and cleans them up
+// Cleanup periodically monitors for stale apps and cleans them up
 func (m *MonitorMgr) Cleanup(app string, exit chan bool) {
 	t := time.NewTimer(m.config.Agent.CleanupTimer)
 	defer t.Stop()
