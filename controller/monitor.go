@@ -14,8 +14,10 @@ import (
 )
 
 const (
+	defaultQueryInterval   = 10 * time.Second
 	defaultMonitorInterval = 10 * time.Second
 	defaultCleanupTimer    = 15 * time.Minute
+	monitorTimeout         = 10 * time.Second
 )
 
 func portMonitor(protocol, port string) bool {
@@ -68,6 +70,7 @@ type MonitorMgr struct {
 	config   *c.Config
 	ctrl     *Controller
 	consul   *ConsulMon
+	nomad    *NomadMonitor
 
 	monMu sync.Mutex
 	clMu  sync.Mutex
@@ -92,8 +95,24 @@ func NewMonitor(config *c.Config) *MonitorMgr {
 			go mon.consulMon()
 		}
 	}
+	if config.Agent.NomadAddr != "" {
+		if config.Agent.NomadNode == "" {
+			glog.Errorf("nomad node is required to enable nomad monitoring")
+		} else {
+			nomadMonitor, err := NewNomadMonitor(config.Agent.NomadAddr, config.Agent.NomadNamespace, config.Agent.NomadNode, config.Agent.NomadToken)
+			if err != nil {
+				glog.Errorf("failed to start Nomad monitor: %v", err)
+			} else {
+				mon.nomad = nomadMonitor
+				go mon.nomad.Monitor(mon)
+			}
+		}
+	}
 	if config.Agent.MonitorInterval == 0 {
 		config.Agent.MonitorInterval = defaultMonitorInterval
+	}
+	if config.Agent.NomadQueryInterval == 0 {
+		config.Agent.NomadQueryInterval = defaultQueryInterval
 	}
 	if config.Agent.CleanupTimer == 0 {
 		config.Agent.CleanupTimer = defaultCleanupTimer
@@ -184,7 +203,7 @@ func (m *MonitorMgr) Add(app *App) {
 }
 
 // Remove removes an app from monitor manager, stops BGP
-/// announcement and cleans up state
+// announcement and cleans up state
 func (m *MonitorMgr) Remove(appName string) {
 	m.monMu.Lock()
 	defer m.monMu.Unlock()
@@ -208,7 +227,15 @@ func (m *MonitorMgr) Remove(appName string) {
 					glog.Errorf("Failed to remove app: %s: %v", a.app.Name, err)
 				}
 			case 2:
-				if err := natRule("D", a.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[1]); err != nil {
+				destPort := parts[1]
+				if a.app.Port != 0 {
+					destPort = fmt.Sprintf("%d", a.app.Port)
+				}
+				localIp := m.ctrl.localIP
+				if a.app.Addr != nil {
+					localIp = a.app.Addr
+				}
+				if err := natRule("D", a.app.Vip.Net.IP, localIp, parts[0], parts[1], destPort); err != nil {
 					glog.Errorf("Failed to remove app: %s: %v", a.app.Name, err)
 				}
 			default:
@@ -260,7 +287,15 @@ func (m *MonitorMgr) checkCond(am *appMon) error {
 						return err
 					}
 				case 2:
-					if err := natRule("A", app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[1]); err != nil {
+					destPort := parts[1]
+					if am.app.Port != 0 {
+						destPort = fmt.Sprintf("%d", am.app.Port)
+					}
+					localIp := m.ctrl.localIP
+					if am.app.Addr != nil {
+						localIp = am.app.Addr
+					}
+					if err := natRule("A", app.Vip.Net.IP, localIp, parts[0], parts[1], destPort); err != nil {
 						return err
 					}
 				default:
@@ -331,7 +366,15 @@ func (m *MonitorMgr) CloseAll() {
 			case 3:
 				natRule("D", am.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[2])
 			case 2:
-				natRule("D", am.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[1])
+				destPort := parts[1]
+				if am.app.Port != 0 {
+					destPort = fmt.Sprintf("%d", am.app.Port)
+				}
+				localIp := m.ctrl.localIP
+				if am.app.Addr != nil {
+					localIp = am.app.Addr
+				}
+				natRule("D", am.app.Vip.Net.IP, localIp, parts[0], parts[1], destPort)
 			default:
 				continue
 			}
@@ -339,7 +382,7 @@ func (m *MonitorMgr) CloseAll() {
 	}
 }
 
-// CleanUp periodically monitors for stale apps and cleans them up
+// Cleanup periodically monitors for stale apps and cleans them up
 func (m *MonitorMgr) Cleanup(app string, exit chan bool) {
 	t := time.NewTimer(m.config.Agent.CleanupTimer)
 	defer t.Stop()

@@ -56,6 +56,8 @@ type App struct {
 	VipConfig config.VipConfig
 	Monitors  Monitors
 	Nats      []string
+	Addr      net.IP
+	Port      int
 	Source    string
 }
 

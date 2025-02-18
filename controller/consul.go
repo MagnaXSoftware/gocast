@@ -108,7 +108,7 @@ func (c *ConsulMon) queryServices() ([]*App, error) {
 		)
 		var vipConf config.VipConfig
 		for _, tag := range service.Tags {
-			// try to find the requires tags. Only vip is mandatory
+			// try to find the required tags. Only vip is mandatory
 			parts := strings.Split(tag, "=")
 			if len(parts) != 2 {
 				continue
