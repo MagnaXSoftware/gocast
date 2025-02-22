@@ -108,7 +108,7 @@ func (n *NomadMonitor) queryServices() ([]*App, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&nomadData); err != nil {
 		return apps, fmt.Errorf("failed to decode nomad data: %v", err)
 	}
-	glog.V(4).Infof("Got nomad data: %+v", nomadData)
+	glog.V(5).Infof("Got nomad data: %+v", nomadData)
 	for _, nsBlock := range nomadData {
 		for _, service := range nsBlock.Services {
 			if !contains(service.Tags, matchTag) {
@@ -170,6 +170,8 @@ func (n *NomadMonitor) serviceToApp(s nomadMiniServiceInfo, ns string) (*App, er
 	}
 	service := services[0]
 
+	glog.V(3).Infof("found service %s (ns: %s) for this node", service.Name, ns)
+
 	var vipConf config.VipConfig
 	for _, tag := range service.Tags {
 		// try to find the required tags. Only vip is mandatory
@@ -191,7 +193,7 @@ func (n *NomadMonitor) serviceToApp(s nomadMiniServiceInfo, ns string) (*App, er
 	if vip == "" {
 		return nil, fmt.Errorf("no \"vip\" tag found in matched service :%s", s.Name)
 	}
-	app, err := NewApp(fmt.Sprintf("%[2]s@%[1]s", ns, service.Name), vip, vipConf, monitors, nats, nomadMonitorIdentifier)
+	app, err := NewApp(fmt.Sprintf("%s@%s", service.Name, ns), vip, vipConf, monitors, nats, nomadMonitorIdentifier)
 	if err != nil {
 		return nil, err
 	}
