@@ -96,6 +96,8 @@ func (c *Controller) AddPeer(peer string) error {
 }
 
 func (c *Controller) getApiPath(route *Route) *api.Path {
+	attrs := make([]*any.Any, 2, 3)
+
 	afi := api.Family_AFI_IP
 	if route.Net.IP.To4() == nil {
 		afi = api.Family_AFI_IP6
@@ -105,20 +107,22 @@ func (c *Controller) getApiPath(route *Route) *api.Path {
 		Prefix:    route.Net.IP.String(),
 		PrefixLen: uint32(prefixlen),
 	})
-	a1, _ := ptypes.MarshalAny(&api.OriginAttribute{
+	attrs[0], _ = ptypes.MarshalAny(&api.OriginAttribute{
 		Origin: c.origin,
 	})
-	a2, _ := ptypes.MarshalAny(&api.NextHopAttribute{
+	attrs[1], _ = ptypes.MarshalAny(&api.NextHopAttribute{
 		NextHop: c.localIP.String(),
 	})
 	var communities []uint32
 	for _, comm := range append(c.communities, route.Communities...) {
 		communities = append(communities, convertCommunity(comm))
 	}
-	a3, _ := ptypes.MarshalAny(&api.CommunitiesAttribute{
-		Communities: communities,
-	})
-	attrs := []*any.Any{a1, a2, a3}
+	if len(communities) > 0 {
+		a3, _ := ptypes.MarshalAny(&api.CommunitiesAttribute{
+			Communities: communities,
+		})
+		attrs = append(attrs, a3)
+	}
 	return &api.Path{
 		Family: &api.Family{Afi: afi, Safi: api.Family_SAFI_UNICAST},
 		Nlri:   nlri,
