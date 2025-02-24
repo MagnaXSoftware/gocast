@@ -29,6 +29,12 @@ type NomadMonitor struct {
 }
 
 func NewNomadMonitor(addr, namespace, node, token string) (*NomadMonitor, error) {
+	if addr == "" {
+		return nil, fmt.Errorf("nomad API addr cannot be empty")
+	}
+	if node == "" {
+		return nil, fmt.Errorf("nomad node ID cannot be empty")
+	}
 	return &NomadMonitor{addr: addr, namespace: namespace, node: node, token: token, client: &http.Client{Timeout: monitorTimeout}}, nil
 }
 
