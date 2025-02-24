@@ -63,6 +63,35 @@ Alternatively, if `gocast_nat=protocol:port` is specified, then GoCast will crea
 
 Example: `gocast_nat=tcp:53` and `gocast_nat=udp:53`
 
+## Nomad Integration
+
+GoCast supports nomad for automatic service discovery. For this to work, it must be configured in the config file and the nomad services need to have a couple tags.
+
+### Configuration
+```yaml
+agent:
+  # required for nomad integration to work, address where the nomad API can be reached
+  nomad_addr: http://127.0.0.1:4646/
+  # optional, if omitted, doesn't send explicit namespace to nomad 
+  # (nomad itself currently defaults to the "default" namespace)
+  nomad_namespace: "*"
+  # required for nomad integration to work, node ID
+  nomad_node: "00000000-0000-0000-0000-000000000000"
+  # optional, include if nomad API requires authentication
+  nomad_token: "token-value"
+  # optional, specify if the query interval should be changed (default 30 seconds)
+  nomad_query_interval: 30s
+```
+
+### Tags
+
+| Name             | Value                                                 | Required | Documentation                                                                                                                                                                                                                                                                                          |
+|------------------|-------------------------------------------------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `enable_gocast`  | N\A                                                   | yes      | Makes the service visible to GoCast                                                                                                                                                                                                                                                                    |
+| `gocast_vip`     | `<addr>/<mask>`                                       | yes      | The IP & mask to advertise. e.g. `10.0.0.1/32`                                                                                                                                                                                                                                                         |
+| `gocast_monitor` | `port:<protocol>:<port>`<br>`exec:<path>`<br>`consul` | no       | The healthcheck to use to monitor the service. Can be specified multiple times, in which case all healthchecks must pass for the service to be considered "up".                                                                                                                                        |
+| `gocast_nat`     | `<protocol>:<listenPort>[:<destinationPort>]`         | no       | Setup an NAT redirection with the given `<protocol>` from `<listenPort>` on the service ip to `<destinationPort>` on the vip. As a shortcut, if the destination port is omitted, the dynamic port will be extracted from the service definition. e.g. `gocast_nat=tcp:53:8053` or `gocast_nat=udp:53`. |
+
 ## Docker support
 The docker image at mayuresh82/gocast can be used to run GoCast inside a container. In order for GoCast to manipulate the host network stack correctly, the container needs to run with NET_ADMIN capablity and host mode networking. For example:
 ```
