@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultQueryInterval   = 10 * time.Second
+	defaultQueryInterval   = 30 * time.Second
 	defaultMonitorInterval = 10 * time.Second
 	defaultCleanupTimer    = 15 * time.Minute
 	monitorTimeout         = 10 * time.Second
@@ -223,7 +223,11 @@ func (m *MonitorMgr) Remove(appName string) {
 			parts := strings.Split(nat, ":")
 			switch len(parts) {
 			case 3:
-				if err := natRule("D", a.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[2]); err != nil {
+				localIp := m.ctrl.localIP
+				if a.app.Addr != nil {
+					localIp = a.app.Addr
+				}
+				if err := natRule("D", a.app.Vip.Net.IP, localIp, parts[0], parts[1], parts[2]); err != nil {
 					glog.Errorf("Failed to remove app: %s: %v", a.app.Name, err)
 				}
 			case 2:
@@ -249,17 +253,17 @@ func (m *MonitorMgr) Remove(appName string) {
 func (m *MonitorMgr) runMonitors(app *App) bool {
 	for _, mon := range app.Monitors {
 		var check bool
+		var err error
 		switch mon.Type {
 		case Monitor_PORT:
 			check = portMonitor(mon.Protocol, mon.Port)
 		case Monitor_EXEC:
 			check = execMonitor(mon.Cmd)
 		case Monitor_CONSUL:
-			c, err := m.consul.healthCheck(app.Name)
+			check, err = m.consul.healthCheck(app.Name)
 			if err != nil {
 				glog.Errorf("Failed to perform consul healthcheck for %s: %v", app.Name, err)
 			}
-			check = c
 		}
 		if !check {
 			glog.V(2).Infof("%s Monitor for app: %s Failed", mon.Type.String(), app.Name)
@@ -283,7 +287,11 @@ func (m *MonitorMgr) checkCond(am *appMon) error {
 				parts := strings.Split(nat, ":")
 				switch len(parts) {
 				case 3:
-					if err := natRule("A", app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[2]); err != nil {
+					localIp := m.ctrl.localIP
+					if am.app.Addr != nil {
+						localIp = am.app.Addr
+					}
+					if err := natRule("A", app.Vip.Net.IP, localIp, parts[0], parts[1], parts[2]); err != nil {
 						return err
 					}
 				case 2:
@@ -364,7 +372,11 @@ func (m *MonitorMgr) CloseAll() {
 			parts := strings.Split(nat, ":")
 			switch len(parts) {
 			case 3:
-				natRule("D", am.app.Vip.Net.IP, m.ctrl.localIP, parts[0], parts[1], parts[2])
+				localIp := m.ctrl.localIP
+				if am.app.Addr != nil {
+					localIp = am.app.Addr
+				}
+				natRule("D", am.app.Vip.Net.IP, localIp, parts[0], parts[1], parts[2])
 			case 2:
 				destPort := parts[1]
 				if am.app.Port != 0 {
