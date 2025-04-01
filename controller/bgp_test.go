@@ -7,11 +7,13 @@ import (
 	"os"
 	"testing"
 
-	"github.com/golang/protobuf/ptypes"
-	"github.com/mayuresh82/gocast/config"
-	api "github.com/osrg/gobgp/api"
-	gobgp "github.com/osrg/gobgp/pkg/server"
+	api "github.com/osrg/gobgp/v3/api"
+	gobgp "github.com/osrg/gobgp/v3/pkg/server"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
+	any "google.golang.org/protobuf/types/known/anypb"
+
+	"github.com/mayuresh82/gocast/config"
 )
 
 type BgpListener struct {
@@ -25,21 +27,27 @@ func NewBgpListener(localAS int) (*BgpListener, error) {
 	go s.Serve()
 	if err := s.StartBgp(context.Background(), &api.StartBgpRequest{
 		Global: &api.Global{
-			As:       uint32(localAS),
+			Asn:      uint32(localAS),
 			RouterId: "100.100.100.100",
 		},
 	}); err != nil {
 		return nil, fmt.Errorf("Unable to start bgp: %v", err)
 	}
 	n := &BgpListener{s: s, recvdPaths: make(chan string)}
-	err := s.MonitorTable(context.Background(), &api.MonitorTableRequest{TableType: api.TableType_ADJ_IN}, func(p *api.Path) {
-		// assumes v4 only paths !
-		var value ptypes.DynamicAny
-		if err := ptypes.UnmarshalAny(p.Nlri, &value); err != nil {
-			return
+	err := s.WatchEvent(context.Background(), &api.WatchEventRequest{Table: &api.WatchEventRequest_Table{Filters: []*api.WatchEventRequest_Table_Filter{
+		{
+			Type: api.WatchEventRequest_Table_Filter_ADJIN,
+		},
+	}}}, func(p *api.WatchEventResponse) {
+		for _, path := range p.GetTable().GetPaths() {
+			// assumes v4 only paths !
+			value, err := any.UnmarshalNew(path.Nlri, proto.UnmarshalOptions{})
+			if err != nil {
+				return
+			}
+			nlri := value.(*api.IPAddressPrefix)
+			n.recvdPaths <- fmt.Sprintf("%s/%d", nlri.Prefix, nlri.PrefixLen)
 		}
-		nlri := value.Message.(*api.IPAddressPrefix)
-		n.recvdPaths <- fmt.Sprintf("%s/%d", nlri.Prefix, nlri.PrefixLen)
 	})
 	if err != nil {
 		return nil, err
@@ -48,7 +56,7 @@ func NewBgpListener(localAS int) (*BgpListener, error) {
 		Peer: &api.Peer{
 			Conf: &api.PeerConf{
 				NeighborAddress: "127.0.0.1",
-				PeerAs:          11111,
+				PeerAsn:         11111,
 			},
 			Transport: &api.Transport{PassiveMode: true},
 		},
@@ -78,7 +86,9 @@ func TestBgpNew(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	defer listener.Shutdown()
+	defer func(listener *BgpListener) {
+		_ = listener.Shutdown()
+	}(listener)
 	a := assert.New(t)
 	c := config.BgpConfig{
 		LocalAS:     11111,
@@ -91,6 +101,7 @@ func TestBgpNew(t *testing.T) {
 	ctrl, err := NewController(c)
 	if err != nil {
 		a.FailNow(err.Error())
+		return
 	}
 	_, ipnet, _ := net.ParseCIDR("20.30.40.0/24")
 	r := &Route{Net: ipnet}
@@ -100,5 +111,5 @@ func TestBgpNew(t *testing.T) {
 
 	path := <-listener.recvdPaths
 	a.Equal("20.30.40.0/24", path)
-	ctrl.Shutdown()
+	_ = ctrl.Shutdown()
 }

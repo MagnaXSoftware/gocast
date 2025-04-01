@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	api "github.com/osrg/gobgp/v3/api"
+
 	c "github.com/mayuresh82/gocast/config"
-	api "github.com/osrg/gobgp/api"
 )
 
 const (

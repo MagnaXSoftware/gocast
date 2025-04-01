@@ -7,11 +7,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/golang/protobuf/ptypes"
-	"github.com/golang/protobuf/ptypes/any"
+	api "github.com/osrg/gobgp/v3/api"
+	gobgp "github.com/osrg/gobgp/v3/pkg/server"
+	any "google.golang.org/protobuf/types/known/anypb"
+
 	c "github.com/mayuresh82/gocast/config"
-	api "github.com/osrg/gobgp/api"
-	gobgp "github.com/osrg/gobgp/pkg/server"
 )
 
 type Route struct {
@@ -66,7 +66,7 @@ func NewController(config c.BgpConfig) (*Controller, error) {
 	go s.Serve()
 	if err := s.StartBgp(context.Background(), &api.StartBgpRequest{
 		Global: &api.Global{
-			As:         uint32(config.LocalAS),
+			Asn:        uint32(config.LocalAS),
 			RouterId:   c.localIP.String(),
 			ListenPort: -1, // gobgp won't listen on tcp:179
 		},
@@ -86,7 +86,7 @@ func (c *Controller) AddPeer(peer string) error {
 	n := &api.Peer{
 		Conf: &api.PeerConf{
 			NeighborAddress: peer,
-			PeerAs:          uint32(c.peerAS),
+			PeerAsn:         uint32(c.peerAS),
 		},
 	}
 	if c.multiHop {
@@ -103,14 +103,14 @@ func (c *Controller) getApiPath(route *Route) *api.Path {
 		afi = api.Family_AFI_IP6
 	}
 	prefixlen, _ := route.Net.Mask.Size()
-	nlri, _ := ptypes.MarshalAny(&api.IPAddressPrefix{
+	nlri, _ := any.New(&api.IPAddressPrefix{
 		Prefix:    route.Net.IP.String(),
 		PrefixLen: uint32(prefixlen),
 	})
-	attrs[0], _ = ptypes.MarshalAny(&api.OriginAttribute{
+	attrs[0], _ = any.New(&api.OriginAttribute{
 		Origin: c.origin,
 	})
-	attrs[1], _ = ptypes.MarshalAny(&api.NextHopAttribute{
+	attrs[1], _ = any.New(&api.NextHopAttribute{
 		NextHop: c.localIP.String(),
 	})
 	var communities []uint32
@@ -118,7 +118,7 @@ func (c *Controller) getApiPath(route *Route) *api.Path {
 		communities = append(communities, convertCommunity(comm))
 	}
 	if len(communities) > 0 {
-		a3, _ := ptypes.MarshalAny(&api.CommunitiesAttribute{
+		a3, _ := any.New(&api.CommunitiesAttribute{
 			Communities: communities,
 		})
 		attrs = append(attrs, a3)

@@ -4,13 +4,13 @@ all:
 	$(MAKE) gocast
 
 gocast:
-	go build -mod=vendor .
+	go build .
 
 debug:
-	go build -mod=vendor -race .
+	go build -race .
 
 test:
-	go test -v -race -short -failfast -mod=vendor ./...
+	go test -v -race -short -failfast ./...
 
 linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o gocast -mod=vendor .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o gocast .
