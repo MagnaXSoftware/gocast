@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang/glog"
 	api "github.com/osrg/gobgp/v3/api"
+	"github.com/sirupsen/logrus"
 
 	c "github.com/mayuresh82/gocast/config"
 )
@@ -281,6 +282,7 @@ func (m *MonitorMgr) checkCond(am *appMon) error {
 	if m.runMonitors(app) {
 		glog.V(2).Infof("All Monitors for app: %s succeeded", app.Name)
 		if !am.announced {
+			logrus.Debugf("not announced, announcing %s", app.Name)
 			if err := addLoopback(app.Name, app.Vip.Net); err != nil {
 				return err
 			}

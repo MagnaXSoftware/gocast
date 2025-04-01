@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"github.com/sirupsen/logrus"
 )
 
 var execCmd = "bash"
@@ -93,6 +94,7 @@ func natRule(op string, vip, localAddr net.IP, protocol, lport, dport string) er
 		"iptables -t nat -%s PREROUTING -p %s -d %s --dport %s -j DNAT --to-destination %s:%s",
 		op, protocol, vip.String(), lport, localAddr.String(), dport,
 	)
+	logrus.Debugf("Executing: %s", cmd)
 	glog.V(4).Infof("updating nat rules: %s", cmd)
 	cmdList := getCmdList(cmd)
 	_, err := exec.Command(execCmd, cmdList...).Output()
