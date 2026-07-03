@@ -9,9 +9,10 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
-	c "github.com/mayuresh82/gocast/config"
 	api "github.com/osrg/gobgp/api"
 	gobgp "github.com/osrg/gobgp/pkg/server"
+
+	"github.com/mayuresh82/gocast/config"
 )
 
 type Route struct {
@@ -28,20 +29,20 @@ type Controller struct {
 	s               *gobgp.BgpServer
 }
 
-func NewController(config c.BgpConfig) (*Controller, error) {
+func NewController(bgpConfig config.BgpConfig) (*Controller, error) {
 	c := &Controller{}
 	var gw net.IP
 	var err error
-	if config.PeerIP == "" {
+	if bgpConfig.PeerIP == "" {
 		gw, err := gateway()
 		if err != nil {
 			return nil, fmt.Errorf("Unable to get gw ip: %v", err)
 		}
 		c.peerIP = gw
 	} else {
-		c.peerIP = net.ParseIP(config.PeerIP)
+		c.peerIP = net.ParseIP(bgpConfig.PeerIP)
 	}
-	if config.LocalIP == "" {
+	if bgpConfig.LocalIP == "" {
 		gw, err = via(c.peerIP)
 		if err != nil {
 			return nil, fmt.Errorf("Unable to get gw ip: %v", err)
@@ -51,10 +52,10 @@ func NewController(config c.BgpConfig) (*Controller, error) {
 			return nil, err
 		}
 	} else {
-		c.localIP = net.ParseIP(config.LocalIP)
+		c.localIP = net.ParseIP(bgpConfig.LocalIP)
 	}
-	c.communities = config.Communities
-	switch config.Origin {
+	c.communities = bgpConfig.Communities
+	switch bgpConfig.Origin {
 	case "igp":
 		c.origin = 0
 	case "egp":
@@ -66,7 +67,7 @@ func NewController(config c.BgpConfig) (*Controller, error) {
 	go s.Serve()
 	if err := s.StartBgp(context.Background(), &api.StartBgpRequest{
 		Global: &api.Global{
-			As:         uint32(config.LocalAS),
+			As:         uint32(bgpConfig.LocalAS),
 			RouterId:   c.localIP.String(),
 			ListenPort: -1, // gobgp won't listen on tcp:179
 		},
@@ -74,9 +75,9 @@ func NewController(config c.BgpConfig) (*Controller, error) {
 		return nil, fmt.Errorf("Unable to start bgp: %v", err)
 	}
 	c.s = s
-	c.peerAS = config.PeerAS
+	c.peerAS = bgpConfig.PeerAS
 	// set mh by default for all ebgp peers
-	if c.peerAS != config.LocalAS {
+	if c.peerAS != bgpConfig.LocalAS {
 		c.multiHop = true
 	}
 	return c, nil

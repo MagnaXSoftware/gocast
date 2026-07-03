@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"flag"
-	"github.com/golang/glog"
-	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/golang/glog"
+	log "github.com/sirupsen/logrus"
 
 	c "github.com/mayuresh82/gocast/config"
 	"github.com/mayuresh82/gocast/controller"

@@ -7,8 +7,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mayuresh82/gocast/config"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/mayuresh82/gocast/config"
 )
 
 var mockConsulData = map[string]string{

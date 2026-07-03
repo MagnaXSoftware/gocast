@@ -109,7 +109,7 @@ func TestNomadQueryServices(t *testing.T) {
 	// test svc with filtered result
 	client.do = makeNomadDoMethod(mockNomadData["single-app-no-vip"], 200)
 
-	fmt.Print("Except an error message on the next line\n")
+	fmt.Print("!!!!! Expect an error message on the next line\n")
 	apps, err = nomadMonitor.queryServices()
 	if err != nil {
 		a.FailNow(err.Error())
