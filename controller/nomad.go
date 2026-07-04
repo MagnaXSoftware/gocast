@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -15,7 +17,9 @@ import (
 )
 
 const (
-	defaultNomadAddr = "http://127.0.0.1:4646"
+	defaultNomadAddr   = "http://127.0.0.1:4646"
+	nomadSecretsDirEnv = "NOMAD_SECRETS_DIR"
+	nomadTokenEnv      = "NOMAD_TOKEN"
 
 	nomadAgentSelfUrl   = "/v1/agent/self"
 	nomadServiceListUrl = "/v1/services"
@@ -26,20 +30,73 @@ type NomadMonitor struct {
 	addr      string
 	namespace string
 	node      string
-	token     string
 	client    Clienter
+}
+
+type nomadClient struct {
+	token  string
+	client Clienter
+}
+
+func newNomadClient(addr, token string) (*nomadClient, string) {
+	c := &nomadClient{
+		token: token,
+		client: &http.Client{
+			Timeout: monitorTimeout,
+		},
+	}
+
+	if unixPath, found := strings.CutPrefix(addr, "unix://"); found {
+		addr = "http://localhost"
+		c.client.(*http.Client).Transport = &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", unixPath)
+			},
+		}
+	}
+
+	return c, addr
+}
+
+func (c *nomadClient) Do(req *http.Request) (resp *http.Response, err error) {
+	if c.token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	}
+
+	resp, err = c.client.Do(req)
+	if err != nil {
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return resp, fmt.Errorf("nomad API returned status code %d", resp.StatusCode)
+	}
+
+	return
 }
 
 func NewNomadMonitor(addr, namespace, nodeID, token string) (*NomadMonitor, error) {
 	if addr == "" {
 		addr = defaultNomadAddr
+		if dir := os.Getenv(nomadSecretsDirEnv); dir != "" {
+			addr = fmt.Sprintf("unix://%s/api.sock", dir)
+			glog.Infof("detected Nomad environment, using unix socket at: %s", addr)
+			if token == "" {
+				glog.Infof("using nomad token from environment")
+				token = os.Getenv(nomadTokenEnv)
+			}
+			if token == "" {
+				return nil, fmt.Errorf("missing token value, the Task API will not work")
+			}
+		}
 	}
-	n := &NomadMonitor{addr: addr, namespace: namespace, token: token, client: &http.Client{Timeout: monitorTimeout}}
+	client, addr := newNomadClient(addr, token)
+	n := &NomadMonitor{addr: addr, namespace: namespace, client: client}
 
 	if nodeID == "" {
 		u := fmt.Sprintf("%s%s", n.addr, nomadAgentSelfUrl)
 		glog.V(4).Infof("querying nomad agent for node_id at %s", u)
-		req, err := n.getHttpReq(http.MethodGet, u)
+		req, err := http.NewRequest(http.MethodGet, u, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -107,18 +164,6 @@ func (m *NomadMonitor) Monitor(mm *MonitorMgr) {
 	}
 }
 
-func (m *NomadMonitor) getHttpReq(method string, url string) (*http.Request, error) {
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if m.token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", m.token))
-	}
-
-	return req, nil
-}
-
 type nomadMiniServiceInfo struct {
 	Name string `json:"ServiceName"`
 	Tags []string
@@ -127,9 +172,9 @@ type nomadMiniServiceInfo struct {
 func (m *NomadMonitor) queryServices() ([]*App, error) {
 	var apps []*App
 
-	addr := fmt.Sprintf("%s%s?namespace=%s", m.addr, nomadServiceListUrl, url.QueryEscape(m.namespace))
-	glog.V(4).Infof("querying nomad services at %s", addr)
-	req, err := m.getHttpReq(http.MethodGet, addr)
+	u := fmt.Sprintf("%s%s?namespace=%s", m.addr, nomadServiceListUrl, url.QueryEscape(m.namespace))
+	glog.V(4).Infof("querying nomad services at %s", u)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -175,15 +220,15 @@ func (m *NomadMonitor) serviceToApp(s nomadMiniServiceInfo, ns string) (*App, er
 		monitors []string
 		nats     []string
 	)
-	addr := fmt.Sprintf(
+	u := fmt.Sprintf(
 		"%s%s?namespace=%s&filter=%s",
 		m.addr,
 		fmt.Sprintf(nomadServiceUrl, url.PathEscape(s.Name)),
 		url.QueryEscape(ns),
 		url.QueryEscape(fmt.Sprintf("NodeID == \"%s\"", m.node)),
 	)
-	glog.V(4).Infof("Querying nomad service %s at %s", s.Name, addr)
-	req, err := m.getHttpReq(http.MethodGet, addr)
+	glog.V(4).Infof("Querying nomad service %s at %s", s.Name, u)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}

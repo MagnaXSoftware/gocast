@@ -65,7 +65,20 @@ Example: `gocast_nat=tcp:53` and `gocast_nat=udp:53`
 
 ## Nomad Integration
 
-GoCast supports nomad for automatic service discovery. For this to work, it must be configured in the config file and the nomad services need to have a couple tags.
+GoCast supports nomad for automatic service discovery. 
+For this to work, it must be configured in the config file and the nomad services need to have a couple tags.
+
+If gocast is running within a nomad allocation, it will use the unix socket at `$NOMAD_SECRETS_DIR/api.sock` instead of the http API.
+Nomad calls this socket the "Task API".
+This API requires authentication, so either a token will need to be defined in the configuration or the task must have the [workload identity added to the environment](https://developer.hashicorp.com/nomad/docs/concepts/workload-identity#workload-identity-for-nomad):
+
+```hcl
+task "example" {
+  identity {
+    env = true
+  }
+}
+```
 
 ### Configuration
 ```yaml
@@ -74,7 +87,8 @@ agent:
     # must be present to enable nomad integration, defaults to false
     enabled: true
     # optional, address where the nomad API can be reached, 
-    # defaults to http://127.0.0.1:4646
+    # defaults to http://127.0.0.1:4646 unless there's an environment 
+    # variable called `NOMAD_SECRETS_DIR`
     addr: "http://127.0.0.1:4646"
     # optional, if omitted, doesn't send explicit namespace to nomad 
     # (nomad itself currently defaults to the "default" namespace)
