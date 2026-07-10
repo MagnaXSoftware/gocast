@@ -88,6 +88,9 @@ func NewMonitor(config *c.Config) *MonitorMgr {
 		monitors: make(map[string]*appMon),
 		cleanups: make(map[string]chan bool),
 	}
+	if err = setupChain(); err != nil {
+		glog.Exitf("Failed to setup iptables chain: %v", err)
+	}
 	if config.Agent.ConsulAddr != "" {
 		consulMonitor, err := NewConsulMonitor(config.Agent.ConsulAddr, config.Agent.ConsulToken)
 		if err != nil {
@@ -409,6 +412,8 @@ func (m *MonitorMgr) CloseAll() {
 			}
 		}
 	}
+
+	_ = teardownChain()
 }
 
 // Cleanup periodically monitors for stale apps and cleans them up

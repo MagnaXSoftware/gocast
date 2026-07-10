@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+
+	"github.com/mayuresh82/gocast/controller/iptables"
 )
 
 var execCmd = "bash"
@@ -88,16 +90,102 @@ func deleteLoopback(addr *net.IPNet) error {
 	return nil
 }
 
-func natRule(op string, vip, localAddr net.IP, protocol, lport, dport string) error {
+func natRule[T string | iptables.Action](op T, vip, localAddr net.IP, protocol, lport, dport string) error {
 	cmd := fmt.Sprintf(
 		"iptables -t nat -%s PREROUTING -p %s -d %s --dport %s -j DNAT --to-destination %s:%s",
 		op, protocol, vip.String(), lport, localAddr.String(), dport,
 	)
 	glog.V(4).Infof("updating nat rules: %s", cmd)
-	cmdList := getCmdList(cmd)
-	_, err := exec.Command(execCmd, cmdList...).Output()
-	if err != nil {
-		return fmt.Errorf("Failed to %s nat rule: %s: %v", op, cmd, err)
+	var err error
+	switch string(op) {
+	case "A":
+		fallthrough
+	case string(iptables.Append):
+		err = GocastChain.Add(
+			iptables.Nat,
+			"-p", protocol,
+			"-d", vip.String(),
+			"--dport", lport,
+			"-j", "DNAT",
+			"--to-destination", fmt.Sprintf("%s:%s", localAddr.String(), dport),
+		)
+	case "D":
+		fallthrough
+	case string(iptables.Delete):
+		err = GocastChain.Remove(
+			iptables.Nat,
+			"-p", protocol,
+			"-d", vip.String(),
+			"--dport", lport,
+			"-j", "DNAT",
+			"--to-destination", fmt.Sprintf("%s:%s", localAddr.String(), dport),
+		)
+	default:
+		err = fmt.Errorf("unknown iptables operation: %s", op)
 	}
+
+	if err != nil {
+		return fmt.Errorf("failed to %s nat rule: %s: %v", op, cmd, err)
+	}
+	return nil
+}
+
+const (
+	GocastChain iptables.Chain = "GOCAST"
+)
+
+func setupChain() (retErr error) {
+	err := iptables.AddChain(iptables.Nat, GocastChain)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			if err := iptables.RemoveChain(iptables.Nat, GocastChain); err != nil {
+				glog.Error(err)
+			}
+		}
+	}()
+
+	preroute := []string{
+		"-m", "addrtype",
+		"--dst-type", "LOCAL",
+		"-j", string(GocastChain)}
+	retErr = iptables.PREROUTING.Add(iptables.Nat, preroute...)
+	if retErr != nil {
+		return retErr
+	}
+	defer func() {
+		if retErr != nil {
+			if err := iptables.PREROUTING.Remove(iptables.Nat, preroute...); err != nil {
+				glog.Error(err)
+			}
+		}
+	}()
+
+	output := []string{
+		"-m", "addrtype",
+		"--dst-type", "LOCAL",
+		"-j", string(GocastChain)}
+	retErr = iptables.OUTPUT.Add(iptables.Nat, output...)
+	if retErr != nil {
+		return retErr
+	}
+	defer func() {
+		if retErr != nil {
+			if err := iptables.OUTPUT.Remove(iptables.Nat, output...); err != nil {
+				glog.Error(err)
+			}
+		}
+	}()
+
+	return nil
+}
+
+func teardownChain() error {
+	_ = iptables.OUTPUT.Remove(iptables.Nat, "-m", "addrtype", "--dst-type", "LOCAL", "-j", string(GocastChain))
+	_ = iptables.PREROUTING.Remove(iptables.Nat, "-m", "addrtype", "--dst-type", "LOCAL", "-j", string(GocastChain))
+
+	_ = iptables.RemoveChain(iptables.Nat, GocastChain)
 	return nil
 }

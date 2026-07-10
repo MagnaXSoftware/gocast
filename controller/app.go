@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/golang/glog"
@@ -54,8 +55,8 @@ func (m Monitors) Contains(elem *Monitor) bool {
 type AppSource string
 
 const (
-	nomadAppSource  AppSource = "nomadApp"
-	consulAppSource AppSource = "consulApp"
+	nomadAppSource  AppSource = "nomad"
+	consulAppSource AppSource = "consul"
 )
 
 // ipPort replicates portions of netip.AddrPort which is only available as of go 1.18 (we support as far back as 1.12)
@@ -158,6 +159,10 @@ func (a *App) Equal(other *App) bool {
 // This is only useful for the nomad apps as the consul ones don't use that field.
 func (a *App) EndpointEqual(other *App) bool {
 	return a.Endpoint.Equal(&other.Endpoint)
+}
+
+func (a *App) FullName() string {
+	return fmt.Sprintf("%s@%s", a.Name, a.Source)
 }
 
 func (a *App) String() string {
