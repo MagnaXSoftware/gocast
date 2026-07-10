@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	defaultNomadAddr   = "http://127.0.0.1:4646"
-	nomadSecretsDirEnv = "NOMAD_SECRETS_DIR"
-	nomadTokenEnv      = "NOMAD_TOKEN"
+	defaultNomadAddr = "http://127.0.0.1:4646"
+	nomadUnixAddrEnv = "NOMAD_UNIX_ADDR"
+	nomadTokenEnv    = "NOMAD_TOKEN"
 
 	nomadAgentSelfUrl   = "/v1/agent/self"
 	nomadServiceListUrl = "/v1/services"
@@ -78,8 +78,8 @@ func (c *nomadClient) Do(req *http.Request) (resp *http.Response, err error) {
 func NewNomadMonitor(addr, namespace, nodeID, token string) (*NomadMonitor, error) {
 	if addr == "" {
 		addr = defaultNomadAddr
-		if dir := os.Getenv(nomadSecretsDirEnv); dir != "" {
-			addr = fmt.Sprintf("unix://%s/api.sock", dir)
+		if unixAddr := os.Getenv(nomadUnixAddrEnv); unixAddr != "" {
+			addr = unixAddr
 			glog.Infof("detected Nomad environment, using unix socket at: %s", addr)
 			if token == "" {
 				glog.Infof("using nomad token from environment")
@@ -276,13 +276,29 @@ func (m *NomadMonitor) serviceToApp(s nomadMiniServiceInfo, ns string) (*App, er
 	if vip == "" {
 		return nil, fmt.Errorf("no \"gocast_vip\" tag found in matched service: %s", s.Name)
 	}
+
+	endpointIP := net.ParseIP(service.Address)
+
+	for i := range nats {
+		parts := strings.Split(nats[i], ":")
+		switch len(parts) {
+		case 4:
+			continue
+		case 3:
+			// format -> protocol:vipPort:servicePort
+			nats[i] = fmt.Sprintf("%s:%s:%s:%s", parts[0], parts[1], endpointIP, parts[2])
+		case 2:
+			// format -> protocol:combinedPort
+			nats[i] = fmt.Sprintf("%s:%s:%s:%s", parts[0], parts[1], endpointIP, parts[1])
+		default:
+			return nil, fmt.Errorf("invalid NAT rule: %s", nats[i])
+		}
+	}
+
 	app, err := NewApp(fmt.Sprintf("%s@%s", service.Name, ns), vip, vipConf, monitors, nats, nomadAppSource)
 	if err != nil {
 		return nil, err
 	}
-
-	app.Endpoint.ip = net.ParseIP(service.Address)
-	app.Endpoint.port = uint16(service.Port)
 
 	return app, nil
 }

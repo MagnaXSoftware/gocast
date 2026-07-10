@@ -59,36 +59,6 @@ const (
 	consulAppSource AppSource = "consul"
 )
 
-// ipPort replicates portions of netip.AddrPort which is only available as of go 1.18 (we support as far back as 1.12)
-type ipPort struct {
-	ip   net.IP
-	port uint16
-}
-
-func (a *ipPort) IsEmpty() bool {
-	return (len(a.ip) == 0 || a.ip.IsUnspecified()) && a.port == 0
-}
-
-func (a *ipPort) Equal(other *ipPort) bool {
-	return a.ip.Equal(other.ip) && a.port == other.port
-}
-
-func (a *ipPort) String() string {
-	return fmt.Sprintf("%s:%d", a.ip.String(), a.port)
-}
-
-func (a *ipPort) HasIP() bool {
-	return len(a.ip) != 0 && !a.ip.IsUnspecified()
-}
-
-func (a *ipPort) IP() net.IP {
-	return a.ip
-}
-
-func (a *ipPort) Port() uint16 {
-	return a.port
-}
-
 type App struct {
 	Name      string
 	Vip       *Route
@@ -96,17 +66,14 @@ type App struct {
 	Monitors  Monitors
 	Nats      []string
 	Source    AppSource
-	// Endpoint is used to represent the IP and Port where the nomad service is bound.
-	// This is required in cases where nomad services are hosted on machines with multiple network interfaces/addresses
-	// and the service is bound on an IP that is different from the localIP (either the configured IP or the IP of the
-	// interface where the BGP Peer can be reached).
-	Endpoint ipPort
 }
 
 func NewApp(appName, vip string, vipConfig config.VipConfig, monitors []string, nats []string, source AppSource) (*App, error) {
 	if appName == "" {
 		return nil, fmt.Errorf("invalid app name")
 	}
+	nats = slices.Clone(nats)
+	slices.Sort(nats)
 	app := &App{Name: appName, Nats: nats, Source: source}
 	_, ipnet, err := net.ParseCIDR(vip)
 	if err != nil {
@@ -142,6 +109,14 @@ func NewApp(appName, vip string, vipConfig config.VipConfig, monitors []string, 
 }
 
 func (a *App) Equal(other *App) bool {
+	if a == nil && other == nil {
+		return true
+	}
+	if a == nil || other == nil {
+		// if one is nil, then the other isn't
+		// (otherwise it would have hit the previous if statement)
+		return false
+	}
 	if len(a.Monitors) != len(other.Monitors) {
 		return false
 	}
@@ -155,10 +130,24 @@ func (a *App) Equal(other *App) bool {
 		a.Source == other.Source
 }
 
-// EndpointEqual determines if the Endpoint of an App matches this one's.
-// This is only useful for the nomad apps as the consul ones don't use that field.
-func (a *App) EndpointEqual(other *App) bool {
-	return a.Endpoint.Equal(&other.Endpoint)
+func (a *App) NatEqual(other *App) bool {
+	if a == nil && other == nil {
+		return true
+	}
+	if a == nil || other == nil {
+		// if one is nil, then the other isn't
+		// (otherwise it would have hit the previous if statement)
+		return false
+	}
+	if len(a.Nats) != len(other.Nats) {
+		return false
+	}
+	for i := range a.Nats {
+		if a.Nats[i] != other.Nats[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) FullName() string {

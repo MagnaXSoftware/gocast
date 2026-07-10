@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,6 +73,41 @@ func makeNomadDoMethod(value struct{ list, service string }, status int) func(*h
 	}
 }
 
+func TestNewNomadMonitor(t *testing.T) {
+	a := assert.New(t)
+
+	var mon *NomadMonitor
+	var err error
+
+	mon, err = NewNomadMonitor("http://test", "*", "1", "")
+	a.NotNil(mon)
+	a.NoError(err)
+
+	oldEnv, hadOldEnv := os.LookupEnv(nomadUnixAddrEnv)
+
+	a.NoError(os.Setenv(nomadUnixAddrEnv, ""))
+	mon, err = NewNomadMonitor("", "*", "1", "")
+	a.NotNil(mon)
+	a.NoError(err)
+	a.Equal(defaultNomadAddr, mon.addr)
+
+	a.NoError(os.Setenv(nomadUnixAddrEnv, "unix:///non-existing-dir/api.sock"))
+	mon, err = NewNomadMonitor("", "*", "1", "1")
+	a.NotNil(mon)
+	a.NoError(err)
+	a.Equal("http://localhost", mon.addr)
+
+	mon, err = NewNomadMonitor("", "*", "1", "")
+	a.Nil(mon)
+	a.Error(err)
+
+	if hadOldEnv {
+		a.NoError(os.Setenv(nomadUnixAddrEnv, oldEnv))
+	} else {
+		a.NoError(os.Unsetenv(nomadUnixAddrEnv))
+	}
+}
+
 func TestNomadQueryServices(t *testing.T) {
 	a := assert.New(t)
 	client := &MockClient{}
@@ -95,6 +131,7 @@ func TestNomadQueryServices(t *testing.T) {
 	if err != nil {
 		a.FailNow(err.Error())
 	}
+	a.NotNil(app)
 	a.True(app.Equal(apps[0]))
 
 	// test svc with filtered result (represents a gocast-enabled service on a different node)
@@ -116,4 +153,19 @@ func TestNomadQueryServices(t *testing.T) {
 	}
 	a.Len(apps, 0)
 
+}
+
+func TestNewNomadClient(t *testing.T) {
+	a := assert.New(t)
+
+	var client *nomadClient
+	var returnedAddr string
+
+	client, returnedAddr = newNomadClient("http://normal-ip", "")
+	a.NotNil(client)
+	a.Equal("http://normal-ip", returnedAddr)
+
+	client, returnedAddr = newNomadClient("unix:///does-not-exist", "")
+	a.NotNil(client)
+	a.Equal("http://localhost", returnedAddr)
 }
